@@ -1,0 +1,125 @@
+# ==========================================
+# .gitignore chung cho MEP (Python/LLM) và PyVRP (Python/C++)
+# ==========================================
+
+# 1. Bảo mật & Biến môi trường (CỰC KỲ QUAN TRỌNG: Không để lộ API key)
+.env
+.env.*
+*.env
+!.env.example
+
+# 2. Môi trường ảo Python (Virtual Environments)
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# 3. Python Bytecode & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+.cache/
+
+# 4. C / C++ / Cython / Thư viện đã biên dịch (Dành cho PyVRP & C extensions)
+*.slo
+*.lo
+*.o
+*.obj
+*.gch
+*.pch
+*.d
+*.pdb
+*.idb
+
+# Thư viện động & tĩnh đã biên dịch
+*.so
+*.dylib
+*.dll
+*.pyd
+*.lai
+*.la
+*.a
+*.lib
+
+# File thực thi
+*.exe
+*.out
+*.app
+
+# 5. Build, Packaging & Distribution (Python / C++ / Meson / CMake)
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+target/
+meson-logs/
+meson-private/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CMakeScripts/
+
+# 6. Kiểm thử & Đo độ bao phủ (Unit test & Coverage)
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+nosetests.xml
+coverage.xml
+*.cover
+
+# 7. Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+
+# 8. Jupyter Notebooks & Profiling
+.ipynb_checkpoints
+profile_default/
+ipython_config.py
+*.prof
+perf.data*
+
+# 9. IDE & Code Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.spyderproject
+.spyproject
+.ropeproject
+
+# 10. File hệ điều hành (Windows / macOS)
+.DS_Store
+**/.DS_Store
+Thumbs.db
+ehthumbs.db
+[Dd]esktop.ini
+
+# 11. Thư mục tạm & Log
+tmp/
+temp/
+*.log
