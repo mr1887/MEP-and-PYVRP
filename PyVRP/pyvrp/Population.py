@@ -71,55 +71,34 @@ class Population:
             raise ValueError(f"Invalid signature. Expected {expected}")
 
     def _safe_import(self, path: Path) -> ModuleType:
-        """Safely import module with restricted environment."""
+        """Import a generated selector with the PyVRP types in its namespace.
+
+        This is an API-compatibility loader, NOT a security sandbox. Generated
+        Python executes in-process and must only come from a trusted workflow.
+        """
         spec = importlib.util.spec_from_file_location("llm_selector", path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Cannot load selector module from {path}")
         module = importlib.util.module_from_spec(spec)
-        
-        # Restricted environment
-        restricted_globals = {
-            "__builtins__": {
-                "min": min,
-                "max": max,
-                "len": len,
-                "range": range,
-                "sorted": sorted,
-                "Exception": Exception,
-                "list": list,  # Add built-in list type
-                "tuple": tuple,  # Add other needed types
-                "type": type,
-                "int": int,
-                "random": random,
-            },
+        module.__dict__.update({
             "Solution": Solution,
             "CostEvaluator": CostEvaluator,
             "RandomNumberGenerator": RandomNumberGenerator,
-        }
-        
-        module.__dict__.update(restricted_globals)
-        self._validate_ast(path.read_text())
-        
+        })
+        self._validate_ast(path.read_text(encoding="utf-8"))
         spec.loader.exec_module(module)
         return module
 
     def _validate_ast(self, code: str):
-        """Ensure code contains only allowed constructs."""
+        """Validate imports and required entry point (not a security boundary)."""
         tree = ast.parse(code)
-
-        allowed_builtins = (ast.Name, ast.Attribute, ast.Subscript)
-        prohibited = (
-            ast.Import, ast.ImportFrom,
-            # ast.Try, ast.While, ast.With,
-            # ast.ListComp, ast.Global, ast.Nonlocal,
-        )
-        
         for node in ast.walk(tree):
-            if isinstance(node, prohibited):
-                raise ValueError(f"Prohibited construct: {type(node).__name__}")
-
-            # # Allow subscript annotations like list[Solution]
-            # if isinstance(node, ast.Subscript):
-            #     if not isinstance(node.value, allowed_builtins):
-            #         raise ValueError("Complex type annotations prohibited")
+            if isinstance(node, ast.Import):
+                if any(alias.name != "pyvrp._pyvrp" for alias in node.names):
+                    raise ValueError("Only 'pyvrp._pyvrp' imports are allowed.")
+            elif isinstance(node, ast.ImportFrom):
+                if node.module != "pyvrp._pyvrp":
+                    raise ValueError("Only imports from pyvrp._pyvrp are allowed.")
 
     def __iter__(self) -> Generator[Solution, None, None]:
         """
