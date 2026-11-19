@@ -16,7 +16,7 @@ import config
 from base_heuristic import INITIAL_HEURISTICS
 from prompt_builder import build_evolution_prompt
 from llm_client import generate_heuristic
-from code_sandbox import compile_heuristic, quick_smoke_test
+from validate import compile_heuristic, quick_smoke_test
 from fitness import evaluate_heuristic, load_vrp_instance
 from population import Population, Heuristic
 
