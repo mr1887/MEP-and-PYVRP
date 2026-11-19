@@ -6,7 +6,7 @@ Run with: python -m unittest discover -s tests -v
 import unittest
 
 from base_heuristic import INITIAL_HEURISTICS
-from code_sandbox import compile_heuristic
+from validate import compile_heuristic
 
 
 class FakeActivity:
