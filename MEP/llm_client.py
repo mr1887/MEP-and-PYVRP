@@ -102,7 +102,9 @@ def extract_code_from_response(response_text: str) -> Optional[str]:
 
 
 def extract_reflection(response_text: str) -> str:
-    """Extract explicit reflection or the docstring reflection from code."""
+    """Extract explicit reflection or the reflection in the generated docstring."""
+    import ast
+
     match = re.search(
         r"REFLECTION:\\s*\\n(.*?)(?:\\n```|\\Z)",
         response_text,
@@ -112,13 +114,13 @@ def extract_reflection(response_text: str) -> str:
         return match.group(1).strip()[:500]
 
     code = extract_code_from_response(response_text) or ""
-    doc = re.search(
-        r'''(?s)def\\s+select_parents\\s*\\(.*?\\):\\s*(""" .*? """|'''.replace(" ", "")
-        + r"''' .*? '''".replace(" ", "") + r")",
-        code,
-    )
-    if doc:
-        return doc.group(1).strip("\"' ")[:500]
+    try:
+        tree = ast.parse(code)
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == "select_parents":
+                return (ast.get_docstring(node) or "")[:500]
+    except SyntaxError:
+        pass
     return ""
 
 
