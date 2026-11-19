@@ -23,7 +23,7 @@ Hai cấp độ parent cần phân biệt:
 | `base_heuristic.py` | Selector Appendix C tái dựng và các baseline seed |
 | `prompt_builder.py` | Prompt Reason–Act–Reflect cho `select_parents` |
 | `llm_client.py` | Gọi Gemini và trích code |
-| `code_sandbox.py` | Kiểm tra cú pháp/chữ ký và compile |
+| `validate.py` | Kiểm tra cú pháp/chữ ký và compile |
 | `hgs_backend.py` | Adapter sửa loader selector trong fork để hỗ trợ built-ins/import phù hợp |
 | `fitness.py` | Gọi HGS thực, truyền selector qua custom hook, tính mean objective |
 | `population.py` | Quần thể các chương trình heuristic của MEP |
