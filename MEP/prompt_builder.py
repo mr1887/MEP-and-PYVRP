@@ -91,10 +91,11 @@ Requirements:
 - Keep selection overhead low; avoid all-pairs comparisons.
 - Use only Python built-ins and the supplied PyVRP objects.
 - Do not redefine PyVRP classes or add external dependencies.
-- This repository pins the author's PyVRP 0.11-era fork. Its route iterator
-  yields integer visits and uses 0 as the depot sentinel. For the Appendix-C
-  route encoding, preserve `set(v for v in route if v > 0)`. Do not silently
-  switch to the newer Activity-based API or alter the client indexing.
+- This repository pins the author's PyVRP fork.
+  * To access routes, always call `solution.routes()` (a Solution object is NOT directly iterable and does NOT have `get_routes()`).
+  * Each `route` in `solution.routes()` can be iterated over.
+  * Its route iterator yields integer visits and uses 0 as the depot sentinel.
+    For route encoding, use `set(v for v in route if v > 0)`. Do not alter the client indexing.
 - Do not assume a candidate improves fitness merely because its design
   sounds sophisticated.
 

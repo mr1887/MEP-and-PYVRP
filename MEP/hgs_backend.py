@@ -12,7 +12,7 @@ from pathlib import Path
 def install_selector_loader_patch():
     try:
         from pyvrp.Population import Population as HgsPopulation
-        from pyvrp._pyvrp import CostEvaluator, RandomNumberGenerator, Solution
+        from Pyvrp.pyvrp.cpp import CostEvaluator, RandomNumberGenerator, Solution
     except Exception as exc:
         raise RuntimeError(
             "Installed pyvrp is not the author's HGS fork. Install requirements.txt."

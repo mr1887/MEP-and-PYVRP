@@ -3,8 +3,22 @@ import os
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent
+
+# Automatically load environment variables from .env if present
+for env_path in [ROOT_DIR / ".env", ROOT_DIR.parent / ".env"]:
+    if env_path.is_file():
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, val = line.split("=", 1)
+                    key = key.strip()
+                    val = val.strip().strip("'\"")
+                    if key and key not in os.environ:
+                        os.environ[key] = val
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 
 # Paper case study: 10 generations, 10 offspring per generation, retain 5.
 NUM_GENERATIONS = int(os.getenv("NUM_GENERATIONS", "10"))

@@ -1,87 +1,135 @@
 def select_parents(population, rng, cost_evaluator, k=2):
-    """
-    Quality-and-Diversity Biased Selection for HGS.
-    Parent 1 is selected for high solution quality via tournament selection.
-    Parent 2 is selected from a candidate tournament pool balancing solution quality
-    and structural distance (edge divergence) relative to Parent 1 to promote
-    meaningful crossover exploration.
+    """Select two parents balancing exploitation, feasibility, and structural diversity.
+
+    Phase II — Design Hypothesis:
+    Parent 1 selection uses a cost-and-feasibility tournament to ensure high-quality
+    exploitation while permitting controlled infeasible selection (probabilistic bypass).
+    Parent 2 is chosen from a second tournament scored by biased rank aggregation
+    (combining cost rank and route-structure Jaccard diversity relative to Parent 1).
+    This structural diversification prevents mating near-identical solutions and avoids
+    wasting crossover operations without requiring expensive all-pairs comparisons.
+
+    Phase IV — Reflection:
+    - Kp/Kt Addressed:
+      * Mitigates Kp.1 (diversity loss) by rewarding route-level Jaccard diversity in Parent 2.
+      * Mitigates Kp.2 (random selection waste) by retaining tournament selection pressure.
+      * Mitigates Kp.3 / Ks.3 (feasibility conflict) via probabilistic feasibility filtering
+        with penalised cost tie-breaking, gracefully handling empty strata.
+      * Respects Kt.1/Kt.2/Kt.3: operates on route client sets via `set(v for v in route if v > 0)`
+        without full-population O(N^2) comparisons.
+    - Remaining limitation / failure mode:
+      * Route set Jaccard similarity measures customer grouping within routes but does not
+        account for sequence/edge ordering inside the routes or sub-tours.
+    - Concrete follow-up revisions:
+      1. Incorporate directed edge (broken pairs) difference alongside route-set Jaccard overlap.
+      2. Dynamically adapt the diversity weight lambda based on the solver's current search phase
+         or population diversity metric.
     """
     n = len(population)
-    assert n >= 2, "Population must have at least two solutions."
+    if n < 2:
+        raise ValueError("Need at least two solutions")
+    if k != 2:
+        raise ValueError("Only k=2 is supported")
 
-    # Helper function to extract undirected edges safely across PyVRP versions
-    def get_edges(solution):
-        edges = set()
-        for route in solution.routes():
-            clients = [getattr(act, "client", act) for act in route]
-            clients = [c for c in clients if isinstance(c, int) and c > 0]
-            if not clients:
+    cost_cache = {}
+    feas_cache = {}
+    route_cache = {}
+
+    def get_cost(idx):
+        if idx not in cost_cache:
+            cost_cache[idx] = cost_evaluator.penalised_cost(population[idx])
+        return cost_cache[idx]
+
+    def get_feas(idx):
+        if idx not in feas_cache:
+            feas_cache[idx] = population[idx].is_feasible()
+        return feas_cache[idx]
+
+    def get_routes(idx):
+        if idx not in route_cache:
+            sol = population[idx]
+            route_cache[idx] = [
+                set(v for v in route if v > 0)
+                for route in sol.routes()
+            ]
+            route_cache[idx] = [r for r in route_cache[idx] if len(r) > 0]
+        return route_cache[idx]
+
+    def sample_tournament(pool_size, count, exclude=None):
+        avail = pool_size - (1 if exclude is not None and 0 <= exclude < pool_size else 0)
+        target = min(count, avail)
+        selected = []
+        while len(selected) < target:
+            idx = rng.randint(pool_size)
+            if idx != exclude and idx not in selected:
+                selected.append(idx)
+        return selected
+
+    def compute_diversity(idx1, idx2):
+        r1 = get_routes(idx1)
+        r2 = get_routes(idx2)
+        if not r1 or not r2:
+            return 1.0
+        r1_lens = [len(r) for r in r1]
+        total_sim = 0.0
+        for cr in r2:
+            len_cr = len(cr)
+            if len_cr == 0:
                 continue
-            edges.add((0, clients[0]))
-            for i in range(len(clients) - 1):
-                u, v = clients[i], clients[i + 1]
-                edges.add((min(u, v), max(u, v)))
-            edges.add((0, clients[-1]))
-        return edges
+            max_sim = 0.0
+            for pr, len_pr in zip(r1, r1_lens):
+                inter = len(cr & pr)
+                if inter > 0:
+                    sim = inter / (len_cr + len_pr - inter)
+                    if sim > max_sim:
+                        max_sim = sim
+                        if max_sim >= 0.999:
+                            break
+            total_sim += max_sim
+        return 1.0 - (total_sim / len(r2))
 
-    # Tournament selection for Parent 1 (focus on solution quality)
-    t1_size = min(4, n)
-    candidates1 = [rng.randint(n) for _ in range(t1_size)]
-    parent1_idx = min(candidates1, key=lambda idx: cost_evaluator.penalised_cost(population[idx]))
+    # Tournament 1 for Parent 1
+    t1_size = min(3, n)
+    t1_candidates = sample_tournament(n, t1_size)
+    allow_infeasible_p1 = rng.rand() < 0.20
 
-    # If population has only 2 individuals, Parent 2 is uniquely determined
-    if n == 2:
-        parent2_idx = 1 - parent1_idx
-        return (population[parent1_idx], population[parent2_idx])
+    def p1_rank_key(idx):
+        cost = get_cost(idx)
+        if allow_infeasible_p1:
+            return (0, cost)
+        return (0 if get_feas(idx) else 1, cost)
 
-    # Sample a tournament pool for Parent 2 distinct from Parent 1
-    t2_size = min(6, n - 1)
-    candidates2 = []
-    attempts = 0
-    max_attempts = t2_size * 4
-    while len(candidates2) < t2_size and attempts < max_attempts:
-        idx = rng.randint(n)
-        if idx != parent1_idx and idx not in candidates2:
-            candidates2.append(idx)
-        attempts += 1
+    p1_idx = min(t1_candidates, key=p1_rank_key)
 
-    # Fallback if sampling did not yield enough unique candidates
-    if len(candidates2) < t2_size:
+    # Tournament 2 for Parent 2 (distinct index, diversity-aware)
+    t2_size = min(4, n - 1)
+    t2_candidates = sample_tournament(n, t2_size, exclude=p1_idx)
+    allow_infeasible_p2 = rng.rand() < 0.20
+
+    def p2_cost_key(idx):
+        cost = get_cost(idx)
+        if allow_infeasible_p2:
+            return (0, cost)
+        return (0 if get_feas(idx) else 1, cost)
+
+    sorted_by_cost = sorted(t2_candidates, key=p2_cost_key)
+    cost_ranks = {idx: rank for rank, idx in enumerate(sorted_by_cost)}
+
+    diversities = {idx: compute_diversity(p1_idx, idx) for idx in t2_candidates}
+    sorted_by_div = sorted(t2_candidates, key=lambda idx: diversities[idx], reverse=True)
+    div_ranks = {idx: rank for rank, idx in enumerate(sorted_by_div)}
+
+    def combined_rank_score(idx):
+        # Balanced rank sum: exploitation (cost) + exploration (diversity relative to p1)
+        return (cost_ranks[idx] + div_ranks[idx], get_cost(idx))
+
+    p2_idx = min(t2_candidates, key=combined_rank_score)
+
+    # Ensure distinct objects if duplicates exist in population
+    if population[p2_idx] is population[p1_idx]:
         for idx in range(n):
-            if idx != parent1_idx and idx not in candidates2:
-                candidates2.append(idx)
-                if len(candidates2) >= t2_size:
-                    break
+            if population[idx] is not population[p1_idx]:
+                p2_idx = idx
+                break
 
-    # Extract edges for Parent 1
-    p1_edges = get_edges(population[parent1_idx])
-
-    # Evaluate cost and structural distance for each Parent 2 candidate
-    costs = {}
-    distances = {}
-    for idx in candidates2:
-        sol = population[idx]
-        costs[idx] = cost_evaluator.penalised_cost(sol)
-        c_edges = get_edges(sol)
-
-        # Normalized edge difference (Jaccard distance)
-        union_size = len(p1_edges | c_edges)
-        if union_size == 0:
-            distances[idx] = 0.0
-        else:
-            intersection_size = len(p1_edges & c_edges)
-            distances[idx] = 1.0 - (intersection_size / union_size)
-
-    # Rank candidates by cost (lower rank is better cost)
-    sorted_by_cost = sorted(candidates2, key=lambda idx: costs[idx])
-    cost_rank = {idx: rank for rank, idx in enumerate(sorted_by_cost)}
-
-    # Rank candidates by distance to Parent 1 (lower rank is higher distance)
-    sorted_by_dist = sorted(candidates2, key=lambda idx: distances[idx], reverse=True)
-    dist_rank = {idx: rank for rank, idx in enumerate(sorted_by_dist)}
-
-    # Composite ranking balancing quality (exploitation) and diversity (exploration)
-    # Weight of 1.2 on diversity ensures we don't pick identical/near-identical solutions
-    parent2_idx = min(candidates2, key=lambda idx: cost_rank[idx] + 1.2 * dist_rank[idx])
-
-    return (population[parent1_idx], population[parent2_idx])
+    return population[p1_idx], population[p2_idx]

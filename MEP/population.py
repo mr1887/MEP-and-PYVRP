@@ -19,7 +19,7 @@ class Heuristic:
     """
     Một cá thể heuristic trong quần thể.
 
-    Tương đương với h ∈ H trong sơ đồ framework.
+    
     """
     code: str                              # Code Python của hàm select_parents
     fitness: float = float("inf")          # Điểm fitness (chi phí VRP trung bình)

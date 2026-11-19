@@ -30,7 +30,21 @@ def select_parents(population: list[Solution], rng: RandomNumberGenerator,
         all_clients = set()
         route_clients = []
         for route in solution.routes():
-            clients_in_route = set(v for v in route if v > 0)
+            clients_in_route = set()
+            for v in route:
+                if hasattr(v, "is_client"):
+                    if v.is_client():
+                        idx = getattr(v, "idx", None)
+                        if idx is None and hasattr(v, "client"):
+                            idx = v.client
+                        if idx is not None and idx > 0:
+                            clients_in_route.add(idx)
+                elif hasattr(v, "idx"):
+                    if v.idx > 0:
+                        clients_in_route.add(v.idx)
+                elif isinstance(v, (int, float)):
+                    if v > 0:
+                        clients_in_route.add(int(v))
             route_clients.append(clients_in_route)
             all_clients.update(clients_in_route)
         return all_clients, route_clients
@@ -122,7 +136,8 @@ def select_parents(population: list[Solution], rng: RandomNumberGenerator,
             feas_bonus = 1.0 if cand_feas else 0.0
             diversity_bonus = 0.5 if abs(costs[idx] - costs[parent1_idx]) > (p2_max_cost - p2_min_cost) * 0.1 else 0.0
             score = 0.6 * cost_score + 0.3 * feas_bonus + 0.1 * diversity_bonus
-            score += (rng.rand() - 0.5) * 0.02
+            rand_val = rng.rand() if hasattr(rng, "rand") else (rng.random() if hasattr(rng, "random") else 0.5)
+            score += (rand_val - 0.5) * 0.02
             if score > best_score:
                 best_score, parent2_idx = score, idx
     else:
@@ -143,7 +158,8 @@ def select_parents(population: list[Solution], rng: RandomNumberGenerator,
             cost_score = 1.0 - (cand_cost - p2_min_cost) / (p2_max_cost - p2_min_cost)
             feas_bonus = 1.0 if cand_feas else 0.0
             score = w_struct * struct_dist + w_cost * cost_score + w_feas * feas_bonus
-            score += (rng.rand() - 0.5) * 0.02
+            rand_val = rng.rand() if hasattr(rng, "rand") else (rng.random() if hasattr(rng, "random") else 0.5)
+            score += (rand_val - 0.5) * 0.02
             if score > best_score:
                 best_score, parent2_idx = score, idx
 
