@@ -1,93 +1,80 @@
-# MEP_evolve_VRP
+# MEP + PyVRP+ reproduction
 
-Nghiên cứu tiến hóa heuristic `select_parents` cho Vehicle Routing Problem bằng LLM (Gemini), theo chu trình Reason–Act–Reflect. **Candidate selector được đánh giá bằng HGS trong fork PyVRP của tác giả bài PyVRP+**, không còn dùng GA/OX tự viết làm evaluator.
+Repository structure:
+- `PyVRP/`: bundled source of the author's PyVRP 0.11-era HGS fork.
+- `MEP/`: the group's MEP loop, prompt, LLM client, heuristic population and evaluator.
 
-## 1. Kiến trúc thực thi
+## Reproduction target
 
-1. MEP chọn hai chương trình heuristic cha mẹ.
-2. Gemini sinh một chương trình `select_parents(population, rng, cost_evaluator, k=2)`.
-3. Mã được kiểm tra cú pháp/chữ ký.
-4. Evaluator ghi mã selector vào file tạm và gọi `pyvrp.solve(..., params=SolveParams(custom_selector_path=...))`.
-5. HGS tạo và quản lý quần thể nghiệm; tại mỗi vòng, `Population.select()` gọi selector do LLM cung cấp.
-6. HGS tự thực hiện crossover, local search, cập nhật penalty và quản lý nghiệm sống sót. Fitness là objective cost của nghiệm khả thi; thấp hơn là tốt hơn.
-7. Kết quả qua nhiều seed/instance được trả về MEP để chọn survivor.
+This implementation evolves the `select_parents` HGS component. The Appendix-C
+reference selector is transcribed in `base_heuristic.py` (Figures 4–7, paper
+pages 13–16). It preserves the paper's strata, 7-way feasibility-biased
+tournament, 20% infeasible admission probability, complementary parent-2
+strata, 20/30 candidate sampling, 500-solution threshold, scoring weights,
+0.02 random perturbation and route-set encoding.
 
-Hai cấp độ parent cần phân biệt:
-- **Heuristic parents:** hai chương trình Python được MEP chọn làm đầu vào cho Gemini.
-- **Solution parents:** hai nghiệm VRP do selector đang được đánh giá chọn bên trong HGS.
+The paper also evolves `select_survivors` and `update_penalties`. Those are
+not yet included in this MEP experiment, so do not describe this repository as
+a complete reproduction of all PyVRP+ components or benchmark tables.
 
-## 2. Cấu trúc chính
+## Installation (Windows)
 
-| File | Vai trò |
-|---|---|
-| `base_heuristic.py` | Selector Appendix C tái dựng và các baseline seed |
-| `prompt_builder.py` | Prompt Reason–Act–Reflect cho `select_parents` |
-| `llm_client.py` | Gọi Gemini và trích code |
-| `code_sandbox.py` | Kiểm tra cú pháp/chữ ký và compile |
-| `hgs_backend.py` | Adapter sửa loader selector trong fork để hỗ trợ built-ins/import phù hợp |
-| `fitness.py` | Gọi HGS thực, truyền selector qua custom hook, tính mean objective |
-| `population.py` | Quần thể các chương trình heuristic của MEP |
-| `evolve.py` | Điều phối các thế hệ MEP |
-| `requirements.txt` | Pin PyVRP fork theo commit |
+Use 64-bit Python 3.11 or 3.12 and a 64-bit MSVC developer shell. The PyVRP
+fork builds native C++ extensions; the x64 compiler must be selected.
 
-## 3. Cài đặt
-
-Fork của tác giả là PyVRP 0.11-era và có HGS/Population hook; không thay bằng `pip install pyvrp` bản mới. PyVRP chính thức từ 0.13 đã chuyển khỏi kiến trúc GA/HGS cũ, nên dự án pin thẳng commit fork trong `requirements.txt`.
-
-Khuyến nghị Python 3.11 và môi trường ảo sạch:
+From the repository root:
 
 ```powershell
 python -m venv .venv
 .venv\\Scripts\\Activate.ps1
 python -m pip install --upgrade pip setuptools wheel
-pip install -r requirements.txt
+python -m pip install -e .\\PyVRP
+python -m pip install -r .\\MEP\\requirements.txt
+```
+
+The local editable install is intentional: it ensures Python imports the
+bundled author's fork, not a separately installed PyPI PyVRP release.
+
+## Configure and run
+
+```powershell
+$env:GEMINI_API_KEY="YOUR_GEMINI_API_KEY"
+cd MEP
 python -m unittest discover -s tests -v
-```
-
-Nếu cài đặt fork thất bại ở bước build C++ extensions, cần cài công cụ build C++ tương thích với hệ điều hành (Windows: Visual Studio Build Tools với C++; Linux: compiler toolchain, CMake/Ninja). Không cài PyVRP 0.14 thay thế để né lỗi, vì API đó không có HGS hook mà dự án cần.
-
-## 4. Chạy
-
-Windows PowerShell:
-
-```powershell
-$env:GEMINI_API_KEY="YOUR_API_KEY"
 python evolve.py
 ```
 
-Tuỳ chỉnh ngân sách qua biến môi trường:
+For a short smoke run:
 
 ```powershell
-$env:NUM_GENERATIONS="2"
-$env:OFFSPRING_PER_GENERATION="2"
+$env:NUM_GENERATIONS="1"
+$env:OFFSPRING_PER_GENERATION="1"
 $env:NUM_EVAL_RUNS="2"
-$env:HGS_TIME_LIMIT="3"
+$env:HGS_TIME_LIMIT="2"
 python evolve.py
 ```
 
-Mặc định: 10 thế hệ, 10 offspring/thế hệ, quần thể heuristic tối đa 5; mỗi candidate được chạy 5 seed trên mỗi instance, mỗi lần HGS tối đa 10 giây. Đây là cấu hình mặc định của repo, không đồng nghĩa tái lập đầy đủ thí nghiệm của bài báo.
+Defaults are 10 generations, 10 offspring per generation, a MEP heuristic
+population of 5, 5 HGS seeds per instance and 10 seconds per HGS run. These
+settings reflect the paper's stated evolutionary counts where available, but
+the paper's full experimental protocol uses much broader benchmarks and
+separate repeated runs. The default data folder currently contains only one
+CVRP instance.
 
-Có thể đặt danh sách instance bằng `VRP_INSTANCES`, phân tách bằng dấu phẩy, ví dụ `X-n101-k25.vrp,X-n106-k14.vrp`. Đảm bảo các file tồn tại trong thư mục `data/`.
+## Important implementation notes
 
-## 5. Lưu ý về selector loader
-
-Fork upstream hiện tại có hai hạn chế trong `Population._safe_import`: AST validator cấm toàn bộ import, và restricted builtins không có đủ hàm Python phổ biến mà selector Appendix C sử dụng. `hgs_backend.py` thay riêng phương thức nạp selector trước khi chạy HGS, kiểm tra import chỉ thuộc namespace PyVRP và cung cấp builtins Python tiêu chuẩn.
-
-Đây **không phải sandbox bảo mật**. `exec()` chạy mã Python trong tiến trình chính; không dùng với mã không đáng tin cậy. Với nghiên cứu nghiêm túc hoặc chạy mã bên ngoài, cần cô lập bằng process/container, giới hạn CPU/RAM/thời gian và quyền truy cập file/network.
-
-## 6. Phạm vi tái lập và giới hạn
-
-- Đã chuyển evaluator sang HGS fork và dùng custom selector hook của `Population`; HGS vẫn giữ crossover, local search, penalty management và survivor management của fork.
-- Dự án hiện chỉ tiến hóa `select_parents`, trong khi bài báo còn nghiên cứu `select_survivors` và `update_penalties`.
-- Benchmark mặc định hiện chỉ có một instance CVRP. Cần bổ sung các biến thể/instances và tập test độc lập trước khi kết luận tổng quát.
-- Ba seed ban đầu (Appendix-C reconstruction, tournament, random) là các baseline do repo chuẩn bị; không khẳng định là bản sao nguyên văn toàn bộ khởi tạo của tác giả.
-- Fork HGS được pin ở một commit cụ thể để tránh thay đổi API; cần giữ nguyên commit và cấu hình khi so sánh các heuristic.
-- Cần chạy end-to-end trên máy sạch sau khi cài dependencies. Unit tests của repo không thay thế được kiểm thử runtime/native extension trên máy của bạn.
-- Kết quả hiện tại nên được mô tả là **tích hợp và đánh giá parent-selector trong HGS của fork PyVRP tác giả**, chưa phải tái lập toàn bộ benchmark và kết quả thực nghiệm của bài báo.
-
-## 7. Đầu ra
-
-- `generated_code/`: code từng offspring.
-- `results/checkpoint.json`: checkpoint sau mỗi thế hệ.
-- `results/best_select_parents.py`: selector có mean HGS objective tốt nhất.
-- `results/final_population.json`: quần thể heuristic cuối.
+- The HGS hook is `SolveParams(custom_selector_path=...)`; `solve()` creates
+  the author's `Population`, whose `select()` invokes the supplied function.
+- The selector must return two Solution objects from the supplied population.
+- The custom loader now permits the paper's `from pyvrp._pyvrp import ...`
+  import and uses normal Python builtins. This is an execution compatibility
+  change, not a security sandbox: generated code runs in-process.
+- The appendix code uses legacy integer route visits (0 = depot) in this
+  fork. The reference selector preserves that API assumption.
+- HGS's survivor selection and penalty adaptation remain the author's defaults.
+  Only parent selection is evolved in this version.
+- Fitness is mean feasible HGS objective cost (lower is better). To match the
+  paper's sign convention exactly, the equivalent MEP maximization fitness is
+  its negative; the current MEP population minimizes stored cost directly.
+- Do not compare the one-instance smoke-run output with the paper's aggregate
+  six-variant results.

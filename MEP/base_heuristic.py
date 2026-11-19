@@ -1,60 +1,78 @@
+"""Reference implementation transcribed from Appendix C (Figures 4–7).
+
+The selector follows the paper's algorithm and coefficients. The only
+compatibility note is that this PyVRP fork uses legacy integer route visits,
+where 0 denotes the depot; the appendix's v > 0 extraction is preserved.
 """
-Paper-aligned baseline for select_parents.
+BASE_HEURISTIC_CODE = '''from pyvrp._pyvrp import CostEvaluator, RandomNumberGenerator, Solution
 
-This is a faithful, API-adapted reconstruction of the best selector in
-Appendix C of Malik et al. (2026), "PyVRP+: LLM-Driven Metacognitive
-Heuristic Evolution for Hybrid Genetic Search in Vehicle Routing Problems".
-
-The only intentional compatibility adaptation is route-client extraction:
-PyVRP versions may expose route elements as ScheduledActivity objects
-rather than plain integers.
-"""
-
-BASE_HEURISTIC_CODE = '''def select_parents(population, rng, cost_evaluator, k=2):
+def select_parents(population: list[Solution], rng: RandomNumberGenerator,
+                   cost_evaluator: CostEvaluator, k: int = 2) -> tuple[Solution, Solution]:
     """
     Hybrid Adaptive Stratified Diversity-Pressure Parent Selector.
-
-    REASON: Pure cost ranking over-exploits; uniform random selection wastes
-    crossover budget. The design hypothesis is to select an elite feasible
-    first parent, then choose a complementary second parent using structural
-    dissimilarity and cost/feasibility signals.
-
-    REFLECT: Stratification can become coarse for tiny populations, and the
-    lightweight route-overlap distance is an approximation of full edge
-    distance. The implementation includes fallbacks for empty strata.
+    Appendix C: cost/feasibility caching, 1/6–2/3–1/3 strata, feasibility-
+    biased tournament for parent 1, complementary strata for parent 2, and
+    adaptive diversity/cost/feasibility scoring.
     """
     n = len(population)
-    if n < 2:
-        raise ValueError("select_parents requires at least two solutions")
-    if k != 2:
-        raise ValueError("Only k=2 is supported")
-
-    # Cache objective and feasibility once per call.
+    assert n >= 2, "Population must have at least two solutions."
+    assert k == 2, "Only k=2 supported."
     costs = [cost_evaluator.penalised_cost(sol) for sol in population]
     feasible = [sol.is_feasible() for sol in population]
     sorted_indices = sorted(range(n), key=lambda i: costs[i])
-
-    # Cost strata: elite = top 1/6, mid = next through 2/3, tail = remainder.
     elite_cut = max(1, n // 6)
     mid_cut = max(elite_cut + 1, n * 2 // 3)
     elite_indices = sorted_indices[:elite_cut]
     mid_indices = sorted_indices[elite_cut:mid_cut]
     tail_indices = sorted_indices[mid_cut:]
 
-    def tournament_select(indices, t_size=7, allow_infeasible_prob=0.2):
-        if not indices:
-            indices = sorted_indices
-        if len(indices) <= t_size:
-            candidates = list(indices)
-        else:
-            candidates = [
-                indices[rng.randint(len(indices))]
-                for _ in range(t_size)
-            ]
+    def encode_solution_simple(solution: Solution):
+        all_clients = set()
+        route_clients = []
+        for route in solution.routes():
+            clients_in_route = set(v for v in route if v > 0)
+            route_clients.append(clients_in_route)
+            all_clients.update(clients_in_route)
+        return all_clients, route_clients
 
+    def simple_structural_distance(enc1, enc2):
+        all_clients1, route_clients1 = enc1
+        all_clients2, route_clients2 = enc2
+        if not all_clients1 and not all_clients2:
+            return 0.0
+        intersection = len(all_clients1 & all_clients2)
+        union = len(all_clients1 | all_clients2)
+        if union == 0:
+            return 0.0
+        global_similarity = intersection / union
+        min_routes = min(len(route_clients1), len(route_clients2))
+        if min_routes == 0:
+            return 1.0 - global_similarity
+        route_overlaps = []
+        for i in range(min_routes):
+            if not route_clients1[i] and not route_clients2[i]:
+                continue
+            r_intersection = len(route_clients1[i] & route_clients2[i])
+            r_union = len(route_clients1[i] | route_clients2[i])
+            if r_union > 0:
+                route_overlaps.append(r_intersection / r_union)
+        if route_overlaps:
+            avg_route_similarity = sum(route_overlaps) / len(route_overlaps)
+        else:
+            avg_route_similarity = 0.0
+        combined_similarity = 0.7 * global_similarity + 0.3 * avg_route_similarity
+        return 1.0 - combined_similarity
+
+    def tournament_select(indices, t_size=7, allow_infeasible_prob=0.2):
+        if len(indices) <= t_size:
+            candidates = indices[:]
+        else:
+            candidates = [indices[rng.randint(len(indices))] for _ in range(t_size)]
         filtered = []
         for idx in candidates:
-            if feasible[idx] or rng.rand() < allow_infeasible_prob:
+            if feasible[idx]:
+                filtered.append(idx)
+            elif rng.rand() < allow_infeasible_prob:
                 filtered.append(idx)
         if not filtered:
             filtered = candidates
@@ -62,151 +80,83 @@ BASE_HEURISTIC_CODE = '''def select_parents(population, rng, cost_evaluator, k=2
 
     parent1_idx = tournament_select(elite_indices)
     parent1 = population[parent1_idx]
-    parent1_rank = sorted_indices.index(parent1_idx)
-
-    # A strong feasible elite parent is paired with a more exploratory parent.
-    if feasible[parent1_idx] and parent1_rank < elite_cut:
+    parent1_feas = feasible[parent1_idx]
+    p1_cost_rank = sorted_indices.index(parent1_idx)
+    if parent1_feas and p1_cost_rank < elite_cut:
         parent2_strata = mid_indices + tail_indices
     else:
         parent2_strata = elite_indices + mid_indices
     if not parent2_strata:
         parent2_strata = sorted_indices
 
-    # Sample without replacement, avoiding a duplicate parent where possible.
-    max_sample_size = min(20 if n > 500 else 30, len(parent2_strata))
-    sampled = []
+    max_sample_size = min(20, len(parent2_strata)) if n > 500 else min(30, len(parent2_strata))
+    sampled_parent2_indices = []
     seen = set()
     attempts = 0
-    while len(sampled) < max_sample_size and attempts < max_sample_size * 2:
-        idx = parent2_strata[rng.randint(len(parent2_strata))]
-        if idx != parent1_idx and idx not in seen:
-            sampled.append(idx)
-            seen.add(idx)
+    while len(sampled_parent2_indices) < max_sample_size and attempts < max_sample_size * 2:
+        candidate = parent2_strata[rng.randint(len(parent2_strata))]
+        if candidate != parent1_idx and candidate not in seen:
+            sampled_parent2_indices.append(candidate)
+            seen.add(candidate)
         attempts += 1
-
-    if not sampled:
-        sampled = [idx for idx in parent2_strata if idx != parent1_idx]
-    if not sampled:
-        sampled = [idx for idx in sorted_indices if idx != parent1_idx]
-    if not sampled:
-        # Defensive fallback; n >= 2 guarantees this should not be needed.
-        return population[parent1_idx], population[(parent1_idx + 1) % n]
-
-    # Normalize cost scores within the sampled candidate set.
-    sampled_costs = [costs[i] for i in sampled]
-    min_cost = min(sampled_costs)
-    max_cost = max(sampled_costs)
-    cost_range = max_cost - min_cost
-    if cost_range == 0:
-        cost_range = 1.0
-
-    def encode_solution_simple(solution):
-        all_clients = set()
-        route_clients = []
-        for route in solution.routes():
-            clients = set()
-            for activity in route:
-                # PyVRP 0.14+ iterates Activity(type, idx), not client integers.
-                # Older releases/forks may expose integer visits or a .client field.
-                client_id = getattr(activity, "client", None)
-                if not isinstance(client_id, int):
-                    is_client = getattr(activity, "is_client", None)
-                    if callable(is_client) and is_client():
-                        client_id = getattr(activity, "idx", None)
-                    elif isinstance(activity, int):
-                        # Legacy route iteration used 0 as the depot sentinel.
-                        client_id = activity if activity > 0 else None
-                if isinstance(client_id, int) and client_id >= 0:
-                    clients.add(client_id)
-            route_clients.append(clients)
-            all_clients.update(clients)
-        return all_clients, route_clients
-
-    def simple_structural_distance(enc1, enc2):
-        all1, routes1 = enc1
-        all2, routes2 = enc2
-        union = len(all1 | all2)
-        global_similarity = len(all1 & all2) / union if union else 0.0
-
-        # Route order is not a stable identity; compare each route to its
-        # best-overlapping route in the other solution (symmetric average).
-        def directional_route_similarity(left, right):
-            if not left:
-                return 0.0
-            scores = []
-            for route_a in left:
-                best = 0.0
-                for route_b in right:
-                    denom = len(route_a | route_b)
-                    score = len(route_a & route_b) / denom if denom else 0.0
-                    if score > best:
-                        best = score
-                scores.append(best)
-            return sum(scores) / len(scores)
-
-        route_similarity = 0.5 * (
-            directional_route_similarity(routes1, routes2)
-            + directional_route_similarity(routes2, routes1)
-        )
-        similarity = 0.7 * global_similarity + 0.3 * route_similarity
-        return 1.0 - similarity
+    if not sampled_parent2_indices:
+        for idx in parent2_strata:
+            if idx != parent1_idx:
+                sampled_parent2_indices.append(idx)
+                break
+        else:
+            sampled_parent2_indices.append(parent2_strata[0])
 
     if n > 500:
-        # Large populations: avoid structural encoding.
-        best_score = float("-inf")
+        best_score = -float('inf')
         parent2_idx = None
-        for idx in sampled:
-            cost_score = 1.0 - (costs[idx] - min_cost) / cost_range
-            feasibility_bonus = 1.0 if feasible[idx] else 0.0
-            diversity_bonus = (
-                0.5 if abs(costs[idx] - costs[parent1_idx]) > cost_range * 0.1
-                else 0.0
-            )
-            score = (
-                0.60 * cost_score
-                + 0.30 * feasibility_bonus
-                + 0.10 * diversity_bonus
-            )
+        p2_costs = [costs[i] for i in sampled_parent2_indices]
+        p2_min_cost = min(p2_costs)
+        p2_max_cost = max(p2_costs) if max(p2_costs) > p2_min_cost else p2_min_cost + 1
+        for idx in sampled_parent2_indices:
+            if idx == parent1_idx:
+                continue
+            cand_cost = costs[idx]
+            cand_feas = feasible[idx]
+            cost_score = 1.0 - (cand_cost - p2_min_cost) / (p2_max_cost - p2_min_cost)
+            feas_bonus = 1.0 if cand_feas else 0.0
+            diversity_bonus = 0.5 if abs(costs[idx] - costs[parent1_idx]) > (p2_max_cost - p2_min_cost) * 0.1 else 0.0
+            score = 0.6 * cost_score + 0.3 * feas_bonus + 0.1 * diversity_bonus
             score += (rng.rand() - 0.5) * 0.02
             if score > best_score:
                 best_score, parent2_idx = score, idx
     else:
-        # Small/medium populations: lazy structural encoding.
-        parent1_encoding = encode_solution_simple(parent1)
-        best_score = float("-inf")
+        p1_enc = encode_solution_simple(population[parent1_idx])
+        p2_costs = [costs[i] for i in sampled_parent2_indices]
+        p2_min_cost = min(p2_costs)
+        p2_max_cost = max(p2_costs) if max(p2_costs) > p2_min_cost else p2_min_cost + 1
+        w_struct, w_cost, w_feas = 0.55, 0.3, 0.15
+        best_score = -float('inf')
         parent2_idx = None
-        for idx in sampled:
-            structural_distance = simple_structural_distance(
-                parent1_encoding, encode_solution_simple(population[idx])
-            )
-            cost_score = 1.0 - (costs[idx] - min_cost) / cost_range
-            feasibility_bonus = 1.0 if feasible[idx] else 0.0
-            score = (
-                0.55 * structural_distance
-                + 0.30 * cost_score
-                + 0.15 * feasibility_bonus
-            )
+        for idx in sampled_parent2_indices:
+            if idx == parent1_idx:
+                continue
+            cand_cost = costs[idx]
+            cand_feas = feasible[idx]
+            cand_enc = encode_solution_simple(population[idx])
+            struct_dist = simple_structural_distance(p1_enc, cand_enc)
+            cost_score = 1.0 - (cand_cost - p2_min_cost) / (p2_max_cost - p2_min_cost)
+            feas_bonus = 1.0 if cand_feas else 0.0
+            score = w_struct * struct_dist + w_cost * cost_score + w_feas * feas_bonus
             score += (rng.rand() - 0.5) * 0.02
             if score > best_score:
                 best_score, parent2_idx = score, idx
 
     if parent2_idx is None:
         parent2_idx = tournament_select(parent2_strata)
-    if parent2_idx == parent1_idx:
-        alternatives = [i for i in range(n) if i != parent1_idx]
-        parent2_idx = alternatives[0]
-
     return population[parent1_idx], population[parent2_idx]
 '''
 
 BASE_HEURISTIC_DESCRIPTION = (
-    "Appendix-C Hybrid Adaptive Stratified Diversity-Pressure selector: "
-    "cost strata, feasibility-biased tournament for parent 1, and adaptive "
-    "cost/feasibility/structural-diversity scoring for parent 2."
+    "Appendix C reference selector (Figures 4–7), transcribed with the "
+    "paper's strata, tournament, sampling limits, weights and route encoding."
 )
 
-# Additional transparent seed heuristics diversify the initial MEP population.
-# These are implementation baselines, not claimed to be the authors' exact seeds.
 RANDOM_HEURISTIC_CODE = '''def select_parents(population, rng, cost_evaluator, k=2):
     """Uniform random distinct-parent baseline."""
     n = len(population)

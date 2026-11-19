@@ -102,16 +102,25 @@ def extract_code_from_response(response_text: str) -> Optional[str]:
 
 
 def extract_reflection(response_text: str) -> str:
-    """
-    Trích xuất phần REFLECTION từ response (dùng làm context_notes cho thế hệ sau).
-    """
+    """Extract explicit reflection or the reflection in the generated docstring."""
+    import ast
+
     match = re.search(
-        r"REFLECTION:\s*\n(.*?)(?:\n```|\Z)",
+        r"REFLECTION:\\s*\\n(.*?)(?:\\n```|\\Z)",
         response_text,
         re.DOTALL,
     )
     if match:
-        return match.group(1).strip()[:500]  # Giới hạn 500 ký tự
+        return match.group(1).strip()[:500]
+
+    code = extract_code_from_response(response_text) or ""
+    try:
+        tree = ast.parse(code)
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == "select_parents":
+                return (ast.get_docstring(node) or "")[:500]
+    except SyntaxError:
+        pass
     return ""
 
 
