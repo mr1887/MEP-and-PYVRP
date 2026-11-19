@@ -91,10 +91,10 @@ Requirements:
 - Keep selection overhead low; avoid all-pairs comparisons.
 - Use only Python built-ins and the supplied PyVRP objects.
 - Do not redefine PyVRP classes or add external dependencies.
-- PyVRP 0.14+ route iteration yields Activity objects with .type, .idx,
-  and .is_client(); client indices are zero-based, so index 0 is valid.
-  Older forks may yield integer visits or expose a .client attribute.
-  Handle both APIs without treating depot activities as clients.
+- This repository pins the author's PyVRP 0.11-era fork. Its route iterator
+  yields integer visits and uses 0 as the depot sentinel. For the Appendix-C
+  route encoding, preserve `set(v for v in route if v > 0)`. Do not silently
+  switch to the newer Activity-based API or alter the client indexing.
 - Do not assume a candidate improves fitness merely because its design
   sounds sophisticated.
 
